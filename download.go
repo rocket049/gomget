@@ -67,7 +67,13 @@ func main() {
 	var myproxy = flag.String("goproxy", "https://goproxy.io", "set GOPROXY url")
 	flag.Parse()
 	goproxy = *myproxy
-	var gopath = os.Getenv("GOPATH")
+	var gopath string
+	var err error
+	gopath, err = getGOPATH()
+	if err != nil {
+		log.Fatalf("getGOPATH:%s\n", err.Error())
+	}
+	fmt.Printf("GOPATH: %s\n", gopath)
 	mod := flag.Arg(0)
 	if mod == "" {
 		fmt.Println("usage: gomget <module path>")
