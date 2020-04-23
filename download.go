@@ -3,14 +3,17 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"container/list"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/build"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -63,6 +66,108 @@ func downloadZipMod(modpath, ver string) (string, error) {
 	return fname, nil
 }
 
+func downloadPath(gopath, modpath string) error {
+	mod := modpath
+	var ver *ModVersion
+	var err error
+	for {
+		ver, err = getLatestVer(mod)
+		if err != nil {
+			fmt.Printf("NotFound:%s (%s)\n", mod, err.Error())
+			mod = path.Dir(mod)
+			if strings.Contains(mod, "/") == false {
+				return fmt.Errorf("getLatestVer:%s\n", err.Error())
+			}
+		} else {
+			fmt.Printf("Found: %s\n", mod)
+			break
+		}
+	}
+	fmt.Printf("Version:%s\nTime:%s\n", ver.Version, ver.Time.Format("2006-01-02 15:04:05"))
+
+	fname, err := downloadZipMod(mod, ver.Version)
+	fmt.Printf("Saved: %s\nUnzipping...\n", fname)
+	rd, err := zip.OpenReader(fname)
+	if err != nil {
+		return err
+	}
+	pkgPath, err := UnzipAll(rd, gopath, ver.Version)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("PackagePath: %s\n", pkgPath)
+	nName := strings.TrimSuffix(pkgPath, "@"+ver.Version)
+	os.RemoveAll(nName)
+	err = os.Rename(pkgPath, nName)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Rename: %s -> %s\n", pkgPath, nName)
+	return nil
+}
+
+func tryGetPackage(goroot, gopath, modpath string) (p *build.Package, err error) {
+	p, err = build.Import(modpath, path.Join(goroot, "src"), 0)
+	if err != nil {
+		p, err = build.Import(modpath, path.Join(gopath, "src"), 0)
+	}
+	return
+}
+
+func arrayToList(array []string) *list.List {
+	res := list.New()
+	for _, v := range array {
+		res.PushBack(v)
+	}
+	return res
+}
+
+func downPathWithDeps(goroot, gopath, modpath string) error {
+	err := downloadPath(gopath, modpath)
+	if err != nil {
+		return err
+	}
+	p, err := tryGetPackage(goroot, gopath, modpath)
+	if err != nil {
+		return err
+	}
+	record := make(map[string]bool)
+	imports := arrayToList(p.Imports)
+	//list
+	for {
+		if imports.Len() == 0 {
+			break
+		}
+		v1 := imports.Front()
+		p1 := v1.Value.(string)
+		imports.Remove(v1)
+
+		if _, ok := record[p1]; ok {
+			continue
+		}
+		record[p1] = true
+
+		p, err = tryGetPackage(goroot, gopath, p1)
+		if err != nil {
+			err = downloadPath(gopath, p1)
+			if err != nil {
+				return err
+			}
+			p, err = tryGetPackage(goroot, gopath, p1)
+			if err != nil {
+				return err
+			}
+		}
+		for _, v := range p.Imports {
+			if _, ok := record[v]; ok {
+				continue
+			}
+			imports.PushBack(v)
+		}
+	}
+	return nil
+}
+
 func main() {
 	var myproxy = flag.String("goproxy", "https://goproxy.io", "set GOPROXY url")
 	flag.Parse()
@@ -78,28 +183,9 @@ func main() {
 	if mod == "" {
 		fmt.Println("usage: gomget <module path>")
 	}
-	ver, err := getLatestVer(mod)
-	if err != nil {
-		log.Fatalf("getLatestVer:%s\n", err.Error())
-	}
-	fmt.Printf("Version:%s\nTime:%s\n", ver.Version, ver.Time.Format("2006-01-02 15:04:05"))
 
-	fname, err := downloadZipMod(mod, ver.Version)
-	fmt.Printf("Saved: %s\nUnzipping...\n", fname)
-	rd, err := zip.OpenReader(fname)
-	if err != nil {
-		panic(err)
-	}
-	pkgPath, err := UnzipAll(rd, gopath, ver.Version)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("PackagePath: %s\n", pkgPath)
-	nName := strings.TrimSuffix(pkgPath, "@"+ver.Version)
-	os.RemoveAll(nName)
-	err = os.Rename(pkgPath, nName)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Rename: %s -> %s\n", pkgPath, nName)
+	goroot := runtime.GOROOT()
+
+	err = downPathWithDeps(goroot, gopath, mod)
+	fmt.Println(err)
 }
