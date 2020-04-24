@@ -117,6 +117,9 @@ func tryGetPackage(goroot, gopath, modpath string) (p *build.Package, err error)
 func arrayToList(array []string) *list.List {
 	res := list.New()
 	for _, v := range array {
+		if strings.Contains(v, ".") == false {
+			continue
+		}
 		res.PushBack(v)
 	}
 	return res
@@ -142,6 +145,10 @@ func downPathWithDeps(goroot, gopath, modpath string) error {
 		p1 := v1.Value.(string)
 		imports.Remove(v1)
 
+		if strings.Contains(p1, ".") == false {
+			continue
+		}
+
 		if _, ok := record[p1]; ok {
 			continue
 		}
@@ -149,6 +156,7 @@ func downPathWithDeps(goroot, gopath, modpath string) error {
 
 		p, err = tryGetPackage(goroot, gopath, p1)
 		if err != nil {
+			fmt.Printf("Download:%s\n", p1)
 			err = downloadPath(gopath, p1)
 			if err != nil {
 				return err
@@ -159,6 +167,9 @@ func downPathWithDeps(goroot, gopath, modpath string) error {
 			}
 		}
 		for _, v := range p.Imports {
+			if strings.Contains(v, ".") == false {
+				continue
+			}
 			if _, ok := record[v]; ok {
 				continue
 			}
